@@ -38,6 +38,17 @@ class TilelinkTester[T <: Component](cGen: => T, simConfig : SpinalSimConfig = S
   val errors = new StringBuilder()
   var noStall = false
 
+  /** This function call forkStimulus() for node clocks and can be changed prior to doSim
+    * for cases like simulation with multi-clock domains with fixed ratio.
+    */
+  var forkNodeStimuli: (Seq[Node], T) => Unit = { (nodes, _) =>
+    val cds = nodes.map(_.clockDomain).distinct
+    cds.foreach(cd => {
+      val period = simRandom.nextInt(40) + 10
+      cd.forkStimulus(period)
+    })
+  }
+
   def doSim(name: String)(body: TilelinkTestbenchBase[T] => Unit): Unit = {
     Try {
       c.doSim(name, 42) { dut =>
@@ -45,13 +56,14 @@ class TilelinkTester[T <: Component](cGen: => T, simConfig : SpinalSimConfig = S
         implicit val idCallback = new IdCallback
         for (i <- 0 until DebugId.space.reserved) idAllocator.allocate(i)
         val tb = new TilelinkTestbenchBase[T](nodes, orderings, c.dut)
-        val cds = nodes.map(_.clockDomain).distinct
-        cds.foreach(_.forkStimulus(simRandom.nextInt(40) + 10))
+
+        forkNodeStimuli(nodes, c.dut)
+
         var timeout = 0
-        cds.head.onSamplings {
+        nodes.head.clockDomain.onSamplings {
           timeout += 1
           if (timeout == 10000) {
-              SimError("Timeout")
+            SimError("Timeout")
           }
         }
         tb.mastersStuff.foreach(_.monitor.add(new MonitorSubscriber {
