@@ -7,6 +7,7 @@ import spinal.lib.bus.misc.{AddressMapping, DefaultMapping, InvertMapping, OrMap
 import spinal.lib.bus.tilelink._
 import spinal.lib.bus.tilelink
 import spinal.lib._
+import spinal.lib.StreamArbiter.{ArbitrationPolicy, RoundRobin, LowerFirst, AssumeOhInput}
 import spinal.lib.system.tag._
 
 import scala.collection.Seq
@@ -70,6 +71,22 @@ class Node() extends NodeUpDown {
     m2s.supportedModifiers += { s =>
       s.copy(dataWidth = dataWidth)
     }
+    this
+  }
+
+  var arbitrationPolicy: ArbitrationPolicy = RoundRobin
+
+  /** Sets the arbitration policy for this node's arbiters and decoders.
+    * 
+    * The default is RoundRobin. Be careful with policies that break tilelink
+    * guaranty of progress requirement, especially when withBCE=true and with
+    * multi-masters.
+    * 
+    * @param policy The arbitration policy to use
+    * @return this Node for method chaining
+    */
+  def setArbitrationPolicy(policy: ArbitrationPolicy): this.type = {
+    arbitrationPolicy = policy
     this
   }
 
@@ -170,6 +187,17 @@ class Node() extends NodeUpDown {
     bus.load(Bus(p))
 
     val arbiter = (withUps && ups.size > 1) generate new Area {
+      // Validate arbitration policy for coherence safety
+      val upBceCount = ups.count(_.down.m2s.parameters.withBCE)
+      if ((arbitrationPolicy == LowerFirst || arbitrationPolicy == AssumeOhInput) &&
+          upBceCount > 1) {
+        SpinalWarning(
+          s"Using ${arbitrationPolicy} arbitration with $upBceCount BCE-capable masters can cause deadlock. " +
+          "Coherent systems require fair arbitration (RoundRobin/SequentialOrder) for C-channel probe responses. " +
+          "Consider using RoundRobin for coherence safety."
+        )
+      }
+
       val core = Arbiter(
         ups.map(up => NodeParameters(
           m = up.down.m2s.parameters,
@@ -178,7 +206,8 @@ class Node() extends NodeUpDown {
         NodeParameters(
           m2s.parameters,
           s2m.parameters
-        )
+        ),
+        arbitrationPolicy
       )
       for((up, arbitered) <- (ups, core.io.ups).zipped){
         up.down.bus.load(arbitered.fromCombStage())
@@ -199,7 +228,7 @@ class Node() extends NodeUpDown {
           NodeParameters(c.up.m2s.parameters, c.up.s2m.parameters)
         )
       }
-      val core = Decoder(bus.p.node, downSpecs)
+      val core = Decoder(bus.p.node, downSpecs, arbitrationPolicy)
       for((down, decoded) <- (downs, core.io.downs).zipped){
         down.up.bus.load(decoded.combStage())
       }

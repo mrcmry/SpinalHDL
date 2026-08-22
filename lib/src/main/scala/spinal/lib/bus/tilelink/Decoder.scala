@@ -2,6 +2,7 @@ package spinal.lib.bus.tilelink
 
 import spinal.core._
 import spinal.lib._
+import spinal.lib.StreamArbiter.{ArbitrationPolicy, RoundRobin}
 import spinal.lib.bus.misc.{AddressMapping, AddressTransformer, DefaultMapping, InterleavedMapping, NeverMapping}
 import spinal.lib.logic.{DecodingSpec, DecodingSpecExample, Masked, Symplify}
 import spinal.lib.system.tag.{MappedNode, MappedTransfers}
@@ -36,7 +37,8 @@ case class DecoderDownSpec(mappeds : Seq[MappedTransfers],
                            transformers : Seq[AddressTransformer],
                            nodeParam : NodeParameters)
 case class Decoder(upNode : NodeParameters,
-                   downsSpec : Seq[DecoderDownSpec]) extends Component{
+                   downsSpec : Seq[DecoderDownSpec],
+                   arbitrationPolicy: ArbitrationPolicy = RoundRobin) extends Component{
   // TODO it doesn't check for overlap (elaboration time)
   val io = new Bundle{
     val up = slave(Bus(upNode))
@@ -108,7 +110,11 @@ case class Decoder(upNode : NodeParameters,
   }
 
   val b = upNode.withBCE generate new Area{
-    val arbiter = StreamArbiterFactory().roundRobin.lambdaLock[ChannelB](_.isLast()).build(ChannelB(upNode), downsSpec.filter(_.nodeParam.withBCE).size)
+    val arbiter = {
+      val factory = StreamArbiterFactory()
+      factory.arbitrationPolicy = arbitrationPolicy
+      factory.lambdaLock[ChannelB](_.isLast()).build(ChannelB(upNode), downsSpec.filter(_.nodeParam.withBCE).size)
+    }
     val iter = arbiter.io.inputs.iterator
     for(i <- 0 until downsSpec.size if downsSpec(i).nodeParam.withBCE){
       val arbiterInput = iter.next()
@@ -135,7 +141,11 @@ case class Decoder(upNode : NodeParameters,
   }
 
   val d = new Area{
-    val arbiter = StreamArbiterFactory().roundRobin.lambdaLock[ChannelD](_.isLast()).build(ChannelD(upNode), downsSpec.size)
+    val arbiter = {
+      val factory = StreamArbiterFactory()
+      factory.arbitrationPolicy = arbitrationPolicy
+      factory.lambdaLock[ChannelD](_.isLast()).build(ChannelD(upNode), downsSpec.size)
+    }
     (arbiter.io.inputs, downs).zipped.foreach{(arb, down) =>
       arb.arbitrationFrom(down.d)
       arb.payload.weakAssignFrom(down.d.payload)

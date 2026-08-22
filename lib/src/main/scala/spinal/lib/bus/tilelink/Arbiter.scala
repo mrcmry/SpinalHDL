@@ -2,6 +2,7 @@ package spinal.lib.bus.tilelink
 
 import spinal.core._
 import spinal.lib._
+import spinal.lib.StreamArbiter.{ArbitrationPolicy, RoundRobin}
 import scala.collection.Seq
 
 object Arbiter{
@@ -25,7 +26,7 @@ object Arbiter{
   }
 }
 
-case class Arbiter(upsNodes : Seq[NodeParameters], downNode : NodeParameters) extends Component{
+case class Arbiter(upsNodes : Seq[NodeParameters], downNode : NodeParameters, arbitrationPolicy: ArbitrationPolicy = RoundRobin) extends Component{
   val obp = downNode //Arbiter.downNodeFrom(upsNodes)
   val io = new Bundle{
     val ups = Vec(upsNodes.map(e => slave(Bus(e))))
@@ -37,7 +38,11 @@ case class Arbiter(upsNodes : Seq[NodeParameters], downNode : NodeParameters) ex
   val ups = io.ups.zipWithIndex.map{case (bus, id) => bus.withSourceOffset(id << perNodeSourceWidth, obp.m.sourceWidth)}
 
   val a = new Area{
-    val arbiter = StreamArbiterFactory().roundRobin.lambdaLock[ChannelA](_.isLast()).build(ChannelA(obp.toBusParameter()), upsNodes.size)
+    val arbiter = {
+      val factory = StreamArbiterFactory()
+      factory.arbitrationPolicy = arbitrationPolicy
+      factory.lambdaLock[ChannelA](_.isLast()).build(ChannelA(obp.toBusParameter()), upsNodes.size)
+    }
 //    (arbiter.io.inputs, ups).zipped.foreach(_ connectFromRelaxed _.a)
     (arbiter.io.inputs, ups).zipped.foreach{(arb, up) =>
       arb.arbitrationFrom(up.a)
@@ -58,7 +63,11 @@ case class Arbiter(upsNodes : Seq[NodeParameters], downNode : NodeParameters) ex
   }
 
   val c = obp.withBCE generate new Area{
-    val arbiter = StreamArbiterFactory().roundRobin.lambdaLock[ChannelC](_.isLast()).build(ChannelC(obp.toBusParameter()), upsNodes.filter(_.withBCE).size)
+    val arbiter = {
+      val factory = StreamArbiterFactory()
+      factory.arbitrationPolicy = arbitrationPolicy
+      factory.lambdaLock[ChannelC](_.isLast()).build(ChannelC(obp.toBusParameter()), upsNodes.filter(_.withBCE).size)
+    }
     (arbiter.io.inputs, ups.filter(_.p.withBCE)).zipped.foreach(_ << _.c)
     arbiter.io.output >> io.down.c
 //    io.down.c.source(obp.m.sourceWidth-sourceOffsetWidth, sourceOffsetWidth bits) := arbiter.io.chosen
@@ -76,7 +85,11 @@ case class Arbiter(upsNodes : Seq[NodeParameters], downNode : NodeParameters) ex
   }
 
   val e = obp.withBCE generate new Area{
-    val arbiter = StreamArbiterFactory().roundRobin.transactionLock.build(ChannelE(obp.toBusParameter()), upsNodes.filter(_.withBCE).size)
+    val arbiter = {
+      val factory = StreamArbiterFactory()
+      factory.arbitrationPolicy = arbitrationPolicy
+      factory.transactionLock.build(ChannelE(obp.toBusParameter()), upsNodes.filter(_.withBCE).size)
+    }
     (arbiter.io.inputs, ups.filter(_.p.withBCE)).zipped.foreach(_ << _.e)
     arbiter.io.output >> io.down.e
   }
